@@ -106,7 +106,7 @@ struct Trade {
 };
 
 struct Order {
-        char symbol[8];
+        char symbol[symbol_length];
         std::uint64_t timestamp;
         char side;
         std::uint32_t quantity;
@@ -117,7 +117,7 @@ struct Order {
 
 
 detail::optional<Trade> parse_trade_format(int sockfd, std::uint8_t totalBytes) {
-        Trade t;
+        Trade t{};
         std::size_t bytes = 0;
         bytes += read(sockfd, t.symbol, symbol_length);
         bytes += read(sockfd, &t.timestamp, sizeof(t.timestamp));
@@ -131,7 +131,7 @@ detail::optional<Trade> parse_trade_format(int sockfd, std::uint8_t totalBytes) 
 }
 
 detail::optional<Quote> parse_quote_format(int sockfd, std::uint8_t totalBytes) {
-        Quote q;
+        Quote q{};
         std::size_t bytes = 0;
         bytes += read(sockfd, q.symbol, symbol_length);
 	std::cout << "symbol bytes read: " << bytes << ", symbol = " << q.symbol << '\n';
@@ -205,7 +205,7 @@ int main(int argc, char* argv[]) {
 
         if (argc < 9) {
                 std::cout << "Invalid number of arguments\n";
-                std::exit(0);
+                std::exit(1);
         }
 
         auto config = Config{
@@ -274,8 +274,6 @@ int main(int argc, char* argv[]) {
                                 first_timestamp = trade->timestamp;
                         }
                 }
-
-
-                std::this_thread::sleep_for(1000ms);
+		std::this_thread::sleep_for(200ms);
         }
 }
