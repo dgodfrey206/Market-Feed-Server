@@ -230,9 +230,8 @@ int main(int argc, char* argv[]) {
         std::optional<std::uint64_t> first_timestamp;
         int market_sockfd = config.market_data_socket.handle();
         int order_sockfd = config.order_connection_socket.handle();
-        int d1 = 0;
-        int d2 = 0;
-        int vwap = 0;
+        int pq_sum = 0;
+        int q_sum = 0;
 
         while (true) {
                 if (!config.market_data_socket)
@@ -259,21 +258,21 @@ int main(int argc, char* argv[]) {
                         auto trade = parse_trade(market_sockfd, config.symbol, len);
                         trade.and_then([&](auto&& self, Trade const& t) {
 				std::cout << "Updating values\n";
-                                d1 += t.price * t.quantity;
-                                d2 += t.quantity;
+                                pq_sum += t.price * t.quantity;
+                                q_sum += t.quantity;
 				if (!first_timestamp) first_timestamp = t.timestamp;
                         }).or_else([&] (auto&& self) {
                                 perror("Something went wrong parsing the trade. Aborting...");
                                 std::exit(1);
                         });
 
-			std::uint64_t diff = (trade->timestamp - first_timestamp.value()) / 1'000'000'000ULL;
+			double diff = (trade->timestamp - first_timestamp.value()) / 1'000'000'000ULL;
 			std::cout << "Timestamp diff: " << diff << '\n';
 			std::cout << "is " << config.vwap_window_period << " second window reached? " << std::boolalpha << (diff >= config.vwap_window_period) << '\n';
 
                         // if the duration has been reached (trade.timestamp - first_timestamp)
                         if (last_quote && trade && (trade->timestamp - first_timestamp.value()) / 1e9 >= config.vwap_window_period) {
-				process_order(config.symbol, config.side, trade->timestamp, d1 / d2, last_quote)
+				process_order(config.symbol, config.side, trade->timestamp, pq_sum / q_sum, last_quote)
 					([&] (Order&& order, std::uint32_t price, std::uint32_t quantity) {
 						order.price = price;
 						order.quantity = std::min(quantity, config.max_order_size);
