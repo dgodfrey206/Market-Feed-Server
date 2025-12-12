@@ -271,7 +271,7 @@ int main(int argc, char* argv[]) {
 			std::cout << "is " << config.vwap_window_period << " second window reached? " << std::boolalpha << (diff >= config.vwap_window_period) << '\n';
 
                         // if the duration has been reached (trade.timestamp - first_timestamp)
-                        if (last_quote && trade && (trade->timestamp - first_timestamp.value()) / 1e9 >= config.vwap_window_period) {
+                        if (last_quote && trade && diff >= config.vwap_window_period) {
 				process_order(config.symbol, config.side, trade->timestamp, pq_sum / q_sum, last_quote)
 					([&] (Order&& order, std::uint32_t price, std::uint32_t quantity) {
 						order.price = price;
