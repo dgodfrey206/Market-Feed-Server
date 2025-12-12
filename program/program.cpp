@@ -130,15 +130,6 @@ detail::optional<Trade> parse_trade_format(int sockfd, std::uint8_t totalBytes) 
         return std::nullopt;
 }
 
-Order parse_order_from_trade(Trade const& trade) {
-        Order order;
-        memcpy(order.symbol, trade.symbol, symbol_length);
-        order.timestamp = trade.timestamp;
-        order.quantity = trade.quantity;
-        order.price = trade.price;
-        return order;
-}
-
 detail::optional<Quote> parse_quote_format(int sockfd, std::uint8_t totalBytes) {
         Quote q;
         std::size_t bytes = 0;
@@ -279,7 +270,7 @@ int main(int argc, char* argv[]) {
 						send(order_sockfd, &order, sizeof(order), 0);
                                 	});
 
-                                d1 = d2 = 0;
+                                pq_sum = q_sum = 0;
                                 first_timestamp = trade->timestamp;
                         }
                 }
