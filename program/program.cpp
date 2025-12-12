@@ -183,6 +183,24 @@ auto parse_trade(int sockfd, std::string_view symbol, std::uint8_t totalBytes) {
         });
 }
 
+auto process_order(Config const& config, double vwap, Quote const& quote) {
+	int price, quantity;
+	bool betterThan = false;
+	if (config.side == 'B') {
+		price = quote->ask_price;
+		quantity = quote->ask_quantity;
+		betterThan = quote->ask_price < vwap;
+	} else {
+		price = quote->bid_price;
+		quantity = quote->bid_quantity;
+		betterThan = quote->bid_price > vwap;
+	}
+	return [](auto&& callable) {
+		if (last_quote->ask_quantity > 0 && betterThan)
+			decltype(callable)(callable)(price, quantity);
+	}
+}
+
 int main(int argc, char* argv[]) {
         using namespace std::chrono_literals;
 
@@ -253,6 +271,12 @@ int main(int argc, char* argv[]) {
 				strncpy(order.symbol, config.symbol.data(), config.symbol.size());
 				order.timestamp = trade->timestamp;
 				order.side = config.side;
+
+				process_order(config, timestamp, last_quote)([&] (int price, int quantity) {
+					order.price = price;
+					order.quantity = std::min(quantity, config.max_order_size);
+					send(order_sockfd, &order, sizeof(order), 0);
+                                });
 
                                 if (config.side == 'B' && last_quote->ask_quantity > 0 && last_quote->ask_price < vwap) {
                                 //      send min(last_quote.askQuantity, max_quantity) orders
