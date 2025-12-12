@@ -84,8 +84,8 @@ static constexpr std::size_t symbol_length = 8;
 struct Config {
         std::string_view symbol;
         char side;
-        unsigned max_order_size;
-        unsigned vwap_window_period;
+        std::uint32_t max_order_size;
+        std::uint32_t vwap_window_period;
         connection market_data_socket;
         connection order_connection_socket;
 };
@@ -183,22 +183,30 @@ auto parse_trade(int sockfd, std::string_view symbol, std::uint8_t totalBytes) {
         });
 }
 
-auto process_order(Config const& config, double vwap, Quote const& quote) {
-	int price, quantity;
+auto process_order(std::string_view symbol, char side, std::uint64_t timestamp, double vwap, std::optional<Quote>& quote) {
+	std::uint32_t price, *quantity;
 	bool betterThan = false;
-	if (config.side == 'B') {
+
+	Order order{};
+        strncpy(order.symbol, symbol.data(), symbol.size());
+        order.timestamp = timestamp;
+        order.side = side;
+
+	if (side == 'B') {
 		price = quote->ask_price;
-		quantity = quote->ask_quantity;
+		quantity = &quote->ask_quantity;
 		betterThan = quote->ask_price < vwap;
 	} else {
 		price = quote->bid_price;
-		quantity = quote->bid_quantity;
+		quantity = &quote->bid_quantity;
 		betterThan = quote->bid_price > vwap;
 	}
-	return [](auto&& callable) {
-		if (last_quote->ask_quantity > 0 && betterThan)
-			decltype(callable)(callable)(price, quantity);
-	}
+	return [order=std::move(order), quantity, price, betterThan](auto&& callable) mutable {
+		if (*quantity > 0 && betterThan) {
+			(decltype(callable)(callable))(std::move(order), price, *quantity);
+			*quantity -= order.quantity;
+		}
+	};
 }
 
 int main(int argc, char* argv[]) {
@@ -212,8 +220,8 @@ int main(int argc, char* argv[]) {
         auto config = Config{
                 .symbol = argv[1],
                 .side = argv[2][0],
-                .max_order_size = static_cast<unsigned>(std::stoul(argv[3])),
-                .vwap_window_period = static_cast<unsigned>(std::stoul(argv[4])),
+                .max_order_size = static_cast<std::uint32_t>(std::stoul(argv[3])),
+                .vwap_window_period = static_cast<std::uint32_t>(std::stoul(argv[4])),
                 .market_data_socket{argv[5], argv[6]},
                 .order_connection_socket{argv[7], argv[8]}
         };
@@ -265,36 +273,12 @@ int main(int argc, char* argv[]) {
 
                         // if the duration has been reached (trade.timestamp - first_timestamp)
                         if (last_quote && trade && (trade->timestamp - first_timestamp.value()) / 1e9 >= config.vwap_window_period) {
-                                vwap = d1 / d2;
-                                //Order order = parse_order_from_trade(trade.value());
-                                Order order{};
-				strncpy(order.symbol, config.symbol.data(), config.symbol.size());
-				order.timestamp = trade->timestamp;
-				order.side = config.side;
-
-				process_order(config, timestamp, last_quote)([&] (int price, int quantity) {
-					order.price = price;
-					order.quantity = std::min(quantity, config.max_order_size);
-					send(order_sockfd, &order, sizeof(order), 0);
-                                });
-
-                                if (config.side == 'B' && last_quote->ask_quantity > 0 && last_quote->ask_price < vwap) {
-                                //      send min(last_quote.askQuantity, max_quantity) orders
-					order.price = last_quote->ask_price;
-                                        order.quantity = std::min(last_quote->ask_quantity, config.max_order_size);
-					last_quote->ask_quantity -= order.quantity;
-					std::cout << "Sending quantity: " << order.quantity << '\n';
-					send(order_sockfd, &order, sizeof order, 0);
-                                }
-                                if (config.side == 'S' && last_quote->bid_quantity > 0 && last_quote->bid_price > vwap) {
-                                //      send min(last_quote.bidQuantity, config.quant)
-					order.price = last_quote->bid_price;
-                                        order.quantity = std::min(last_quote->bid_quantity, config.max_order_size);
-					last_quote->bid_quantity -= order.quantity;
-					send(order_sockfd, &order, sizeof order, 0);
-                                }
-
-                                //send(order_sockfd, &order, sizeof order, 0);
+				process_order(config.symbol, config.side, trade->timestamp, d1 / d2, last_quote)
+					([&] (Order&& order, std::uint32_t price, std::uint32_t quantity) {
+						order.price = price;
+						order.quantity = std::min(quantity, config.max_order_size);
+						send(order_sockfd, &order, sizeof(order), 0);
+                                	});
 
                                 d1 = d2 = 0;
                                 first_timestamp = trade->timestamp;
