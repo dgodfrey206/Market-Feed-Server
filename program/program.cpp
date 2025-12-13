@@ -202,9 +202,9 @@ namespace Schema {
 	        struct Header {
                 	std::uint8_t length;
                 	std::uint8_t type;
-        	};
-        	
-	}
+        	} header;
+        	std::variant<Quote, Trade> body;
+	};
 };
 
 //template<class Schema>
@@ -223,20 +223,25 @@ struct Feed {
 
 	using Header = typename Packet::Header;
 
-	void parse(tag<Quote>, std::string_view symbol, std::size_t len) {
-		parse_quote(market_sockfd, symbol, len).and_then([&](auto&&, auto&& quote) {
+	void parse(Quote& quote, std::string_view symbol, std::size_t len) {
+		auto temp = parse_quote(market_sockfd, symbol, len);
+
+		if (temp) {
                 	std::cout << "Successfully parsed quote\n";
-                        current_quote = quote;
-                });
+                        current_quote = temp;
+			quote = temp.value();
+			std::cout << "Hello\n";
+                };
 	}
 
-	void parse(tag<Trade>, std::string_view symbol, std::size_t len) {
-		current_trade = parse_trade(market_sockfd, p_args.symbol, len);
-                current_trade.and_then([&](auto&& self, Trade const& t) {
+	void parse(Trade& trade, std::string_view symbol, std::size_t len) {
+		auto temp = parse_trade(market_sockfd, p_args.symbol, len);
+                temp.and_then([&](auto&& self, Trade const& t) {
                 	std::cout << "Updating values\n";
                         pq_sum += t.price * t.quantity;
                         q_sum += t.quantity;
-                        if (!first_timestamp) first_timestamp = t.timestamp;
+			trade = t;
+			seen_trade = true;
                 }).or_else([&] (auto&& self) {
                 	perror("Something went wrong parsing the trade. Aborting...");
                         std::exit(1);
@@ -246,51 +251,69 @@ struct Feed {
 	void forward() {
 		if (!p_args.market_data_socket)
 			return;
-		Header header;
-                ssize_t n = read(market_sockfd, &header, sizeof header);
+
+                ssize_t n = read(market_sockfd, &current_packet.header, sizeof current_packet.header);
                 std::cout << "bytes read from header = " << n << '\n';
 
                 if (n < 0)
                         return;
 
-                std::cout << "len = " << (int)header.length << " type = " << (int)header.type << '\n';
-                if (header.length <= 0)
+                std::cout << "len = " << (int)current_packet.header.length << " type = " << (int)current_packet.header.type << '\n';
+                if (current_packet.header.length <= 0)
                         return;
 
-		if (header.type == 1) {
-			parse(tag<Quote>{}, p_args.symbol, header.length);
+		/*if (packet.header.type == 1) {
+			packet.body.emplace(Quote{});
+			parse(tag<Quote>{}, p_args.symbol, packet.header.length);
 		} else {
-			parse(tag<Trade>{}, p_args.symbol, header.length);
+			packet.body.emplace(Trade{});
+			parse(tag<Trade>{}, p_args.symbol, packet.header.length);
 			try_process_order();
+		}*/
+
+		if (current_packet.header.type == 1) {
+			current_packet.body = Quote{};
+		} else {
+			current_packet.body = Trade{};
 		}
+
+		std::visit([this](auto&& body) {
+			parse(body, p_args.symbol, current_packet.header.length);
+			if (!first_timestamp) first_timestamp = body.timestamp;
+
+			int diff = (body.timestamp - first_timestamp.value()) / 1'000'000'000ULL;
+			std::cout << "body.timestamp: " << body.timestamp << '\n';
+			std::cout << "Timestamp diff: " << diff << '\n';
+               		std::cout << "is " << p_args.vwap_window_period << " second window reached? " << std::boolalpha << (diff >= p_args.vwap_window_period) << '\n';
+			if (current_quote && seen_trade && diff >= p_args.vwap_window_period) {
+				std::cout << "PROCESSING ORDER\n";
+				process_order(body.timestamp);
+				std::cout << "New timestamp: " << (body.timestamp) << '\n';
+			}
+		}, current_packet.body);
+		std::cout << "---------------------------------\n";
 	}
 
-	void try_process_order() {
-		double diff = (current_trade->timestamp - first_timestamp.value()) / 1'000'000'000ULL;
-                std::cout << "Timestamp diff: " << diff << '\n';
-                std::cout << "is " << p_args.vwap_window_period << " second window reached? " << std::boolalpha << (diff >= p_args.vwap_window_period) << '\n';
+	void process_order(std::uint64_t timestamp) {
+                ::process_order(p_args.symbol, p_args.side, timestamp, pq_sum / q_sum, current_quote)
+                       	([&] (Order order, std::uint32_t price, std::uint32_t quantity) {
+                               	order.price = price;
+                                order.quantity = std::min(quantity, p_args.max_order_size);
+                                send(p_args.order_connection_socket.handle(), &order, sizeof(order), 0);
+                        });
 
-                // if the duration has been reached (trade.timestamp - first_timestamp)
-                if (current_quote && current_trade && diff >= p_args.vwap_window_period) {
-                	process_order(p_args.symbol, p_args.side, current_trade->timestamp, pq_sum / q_sum, current_quote)
-                        	([&] (Order order, std::uint32_t price, std::uint32_t quantity) {
-                                	order.price = price;
-                                        order.quantity = std::min(quantity, p_args.max_order_size);
-                                        send(p_args.order_connection_socket.handle(), &order, sizeof(order), 0);
-                                 });
-
-                        pq_sum = q_sum = 0;
-                        first_timestamp = current_trade->timestamp;
-                }
+                pq_sum = q_sum = 0;
+                first_timestamp = timestamp;
 	}
 private:
 	Config& p_args;
 	detail::optional<Quote> current_quote;
-	detail::optional<Trade> current_trade;
+	Packet current_packet;
 	std::optional<std::uint64_t> first_timestamp;
 	int market_sockfd;
 	int pq_sum = 0;
         int q_sum = 0;
+	bool seen_trade = false;
 private:
 };
 
@@ -311,7 +334,7 @@ int main(int argc, char* argv[]) {
                 .order_connection_socket{argv[7], argv[8]}
         };
 
-	Feed feed{config};
+	Feed<Schema::Packet> feed{config};
 
 
         while (true) {
