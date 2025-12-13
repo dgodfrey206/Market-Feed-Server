@@ -9,16 +9,9 @@
 #include <type_traits>
 #include <cerrno>
 #include <cassert>
+#include <variant>
 
 namespace detail {
-    template<class T>
-    struct remove_cvref {
-      using type = std::remove_cv_t<std::remove_reference_t<T>>;
-    };
-
-    template<class T>
-    using remove_cvref_t = typename remove_cvref<T>::type;
-
     template<class T>
     struct optional : std::optional<T> {
        using std::optional<T>::optional;
@@ -65,9 +58,7 @@ struct connection {
 		assert(success);
         }
 
-        explicit operator bool() const {
-                return success;
-        }
+        explicit operator bool() const { return success; }
 
         int handle() const { return sock; }
 
@@ -113,8 +104,6 @@ struct Order {
         std::uint32_t price;
 };
 #pragma pack(pop)
-
-
 
 detail::optional<Trade> parse_trade_format(int sockfd, std::uint8_t totalBytes) {
         Trade t{};
@@ -192,13 +181,92 @@ auto process_order(std::string_view symbol, char side, std::uint64_t timestamp, 
 		quantity = &quote->bid_quantity;
 		betterThan = quote->bid_price > vwap;
 	}
-	return [order=std::move(order), quantity, price, betterThan](auto&& callable) mutable {
+	return [=](auto&& callable) mutable {
 		if (*quantity > 0 && betterThan) {
-			(decltype(callable)(callable))(std::move(order), price, *quantity);
+			(decltype(callable)(callable))(order, price, *quantity);
 			*quantity -= order.quantity;
 		}
 	};
 }
+
+template<class T>
+struct tag {};
+
+struct Feed {
+	Feed(Config p_args) :
+		p_args(p_args),
+		market_sock(p_args.market_data_socket.handle())
+	{ }
+	void parse(tag<Quote>, std::string_view symbol, std::size_t len) {
+		parse_quote(market_sockfd, symbol, len).and_then([&](auto&&, auto&& quote) {
+                	std::cout << "Successfully parsed quote\n";
+                        current_quote = quote;
+                });
+	}
+
+	void parse(tag<Trade>, std::string_view symbol, std::size_t len) {
+		current_trade = parse_trade(market_sockfd, config.symbol, len);
+                current_trade.and_then([&](auto&& self, Trade const& t) {
+                	std::cout << "Updating values\n";
+                        pq_sum += t.price * t.quantity;
+                        q_sum += t.quantity;
+                        if (!first_timestamp) first_timestamp = t.timestamp;
+                }).or_else([&] (auto&& self) {
+                	perror("Something went wrong parsing the trade. Aborting...");
+                        std::exit(1);
+                });
+	}
+
+	void process_packet() {
+		std::byte header[sizeof(std::uint8_t) * 2];
+                ssize_t n = read(market_sockfd, header, sizeof header);
+                std::cout << "bytes read from header = " << n << '\n';
+                if (n < 0)
+                        return;
+
+		std::uint8_t len = std::to_integer<std::uint8_t>(header[0]);
+                std::uint8_t type = std::to_integer<std::uint8_t>(header[1]);
+                std::cout << "len = " << (int)len << " type = " << (int)type << '\n';
+                if (len <= 0)
+                        break;
+
+		if (type == 1) {
+			parse(tag<Quote>{}, market_sockfd, config.symbol, len);
+		} else {
+			parse(tag<Trade>{}, market_sockfd, config.symbol, len);
+			try_process_order();
+		}
+	}
+
+	void try_process_order() {
+		double diff = (current_trade->timestamp - first_timestamp.value()) / 1'000'000'000ULL;
+                std::cout << "Timestamp diff: " << diff << '\n';
+                std::cout << "is " << config.vwap_window_period << " second window reached? " << std::boolalpha << (diff >= config.vwap_window_peri>
+
+                // if the duration has been reached (trade.timestamp - first_timestamp)
+                if (current_quote && current_trade && diff >= config.vwap_window_period) {
+                	process_order(config.symbol, config.side, current_trade->timestamp, pq_sum / q_sum, current_quote)
+                        	([&] (Order order, std::uint32_t price, std::uint32_t quantity) {
+                                	order.price = price;
+                                        order.quantity = std::min(quantity, config.max_order_size);
+                                        send(p_args.order_connect_socket.handle(), &order, sizeof(order), 0);
+                                 });
+
+                        pq_sum = q_sum = 0;
+                        first_timestamp = current_trade->timestamp;
+                }
+	}
+private:
+	Config p_args;
+	std::optional<Quote> current_quote;
+	std::optional<Trade> current_trade;
+	int market_sockfd;
+	std::uint64_t first_timestamp;
+	int pq_sum = 0;
+        int q_sum = 0;
+private:
+	
+};
 
 int main(int argc, char* argv[]) {
         using namespace std::chrono_literals;
@@ -224,11 +292,13 @@ int main(int argc, char* argv[]) {
         int pq_sum = 0;
         int q_sum = 0;
 
+	Feed feed{config};
+
         while (true) {
                 if (!config.market_data_socket)
                         break;
 
-                std::byte header[sizeof(std::uint8_t) * 2];
+                /*std::byte header[sizeof(std::uint8_t) * 2];
                 ssize_t n = read(market_sockfd, header, sizeof header);
 		std::cout << "bytes read from header = " << n << '\n';
                 if (n < 0)
@@ -264,7 +334,7 @@ int main(int argc, char* argv[]) {
                         // if the duration has been reached (trade.timestamp - first_timestamp)
                         if (last_quote && trade && diff >= config.vwap_window_period) {
 				process_order(config.symbol, config.side, trade->timestamp, pq_sum / q_sum, last_quote)
-					([&] (Order&& order, std::uint32_t price, std::uint32_t quantity) {
+					([&] (Order order, std::uint32_t price, std::uint32_t quantity) {
 						order.price = price;
 						order.quantity = std::min(quantity, config.max_order_size);
 						send(order_sockfd, &order, sizeof(order), 0);
@@ -273,7 +343,7 @@ int main(int argc, char* argv[]) {
                                 pq_sum = q_sum = 0;
                                 first_timestamp = trade->timestamp;
                         }
-                }
+                }*/
 		std::this_thread::sleep_for(200ms);
         }
 }
