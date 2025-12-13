@@ -11,7 +11,7 @@
 #include <cassert>
 #include <variant>
 
-namespace detail {
+namespace details {
     template<class... Ts>
     struct overloads : Ts... {
 	using Ts::operator()...;
@@ -21,8 +21,8 @@ namespace detail {
     overloads(Ts...) -> overloads<Ts...>;
 }
 
-struct connection {
-        explicit connection(std::string_view ip, std::string_view port) :
+struct Socket {
+        explicit Socket(std::string_view ip, std::string_view port) :
                 sock{socket(AF_INET, SOCK_STREAM, 0)}
         {
                 auto p = static_cast<unsigned short>(std::stoul(port.data()));
@@ -41,7 +41,7 @@ struct connection {
 
         int handle() const { return sock; }
 
-        ~connection() {
+        ~Socket() {
                 close(sock);
         }
 private:
@@ -56,8 +56,6 @@ struct Config {
         char side;
         std::uint32_t max_order_size;
         std::uint32_t vwap_window_period;
-        connection market_data_socket;
-        connection order_connection_socket;
 };
 
 namespace Schema {
@@ -95,26 +93,53 @@ namespace Schema {
 }
 
 template<class Packet>
-struct Feed {
-	Feed() = delete;
-	Feed(Config& config) :
-		p_args(config),
-		market_sockfd(p_args.market_data_socket.handle())
-	{ }
+class Feed {
+	struct socket_addresses {
+                std::string_view market_data_ip, market_data_port;
+                std::string_view order_data_ip,  order_data_port;
+        };
+
+        struct packet_reader {
+        	bool read_header(int sockfd, Packet& packet) {
+                        return read(sockfd, &packet.header, sizeof packet.header) == sizeof packet.header;
+                }
+
+                template<class Body>
+                bool read_body(int sockfd, Body& body) {
+                        return read(sockfd, &body, sizeof(Body)) == sizeof(Body);
+                }
+        };
 
 	using Header = typename Packet::Header;
-	using Trade = Schema::Trade;
-	using Quote = Schema::Quote;
-	using Order = Schema::Order;
-
+        using Trade = Schema::Trade;
+        using Quote = Schema::Quote;
+        using Order = Schema::Order;
 private:
-	struct packet_reader;
+        Config& p_args;
+        socket_addresses addr;
+        Socket market_connection;
+        std::optional<Quote> current_quote;
+        Packet current_packet;
+        std::optional<std::uint64_t> first_timestamp;
+        packet_reader reader;
+        int market_sockfd;
+        int pq_sum = 0;
+        int q_sum = 0;
+        bool seen_trade = false;
 public:
+
+	Feed() = delete;
+	Feed(Config& config, socket_addresses addr) :
+		p_args(config),
+		addr(addr),
+		market_connection(addr.market_data_ip, addr.market_data_port),
+		market_sockfd(market_connection.handle())
+	{ }
 
 	auto process_order_impl(std::uint64_t timestamp, double vwap);
 
 	void forward() {
-		if (!p_args.market_data_socket)
+		if (!market_connection)
 			return;
 
 		if (!reader.read_header(market_sockfd, current_packet))
@@ -131,15 +156,18 @@ public:
 		}
 
 		auto process_packet_body = [this](auto&& body, auto&& callable) {
-			reader.read_body(market_sockfd, body);
+			if (!reader.read_body(market_sockfd, body)) {
+				perror("Failed to read packet body.");
+				return;
+			}
 			if (strncmp(body.symbol, p_args.symbol.begin(), symbol_length) == 0) {
-				callable();
+				std::forward<decltype(callable)>(callable)();
 			}
 			if (!first_timestamp) first_timestamp = body.timestamp;
 			try_process_order(body);
 		};
 
-		std::visit(detail::overloads{
+		std::visit(details::overloads{
 			[&](Quote& body) {
 				process_packet_body(body, [&] { current_quote = body; });
 			},
@@ -158,26 +186,16 @@ public:
 	void process_order(std::uint64_t timestamp) {
                 process_order_impl(timestamp, pq_sum / q_sum)
                        	([&] (Order order, std::uint32_t price, std::uint32_t quantity) {
+				Socket order_connection(addr.order_data_ip, addr.order_data_port);
                                	order.price = price;
                                 order.quantity = std::min(quantity, p_args.max_order_size);
-                                send(p_args.order_connection_socket.handle(), &order, sizeof(order), 0);
+                                send(order_connection.handle(), &order, sizeof(order), 0);
                         });
 
                 pq_sum = q_sum = 0;
                 first_timestamp = timestamp;
 	}
 private:
-	Config& p_args;
-	std::optional<Quote> current_quote;
-	Packet current_packet;
-	std::optional<std::uint64_t> first_timestamp;
-	packet_reader reader;
-	int market_sockfd;
-	int pq_sum = 0;
-        int q_sum = 0;
-	bool seen_trade = false;
-private:
-
 	template<class B>
 	void try_process_order(B& body) {
 		int diff = (body.timestamp - first_timestamp.value()) / 1'000'000'000ULL;
@@ -190,17 +208,6 @@ private:
                         std::cout << "New timestamp: " << (body.timestamp) << '\n';
                 }
 	}
-
-	struct packet_reader {
-        	bool read_header(int sockfd, Packet& packet) {
-                	return read(sockfd, &packet.header, sizeof packet.header) == sizeof packet.header;
-        	}
-
-        	template<class Body>
-        	bool read_body(int sockfd, Body& body) {
-                	return read(sockfd, &body, sizeof(Body)) == sizeof(Body);
-        	}
-	};
 };
 
 template<class Packet>
@@ -239,11 +246,9 @@ int main(int argc, char* argv[]) {
                 .side = argv[2][0],
                 .max_order_size = static_cast<std::uint32_t>(std::stoul(argv[3])),
                 .vwap_window_period = static_cast<std::uint32_t>(std::stoul(argv[4])),
-                .market_data_socket{argv[5], argv[6]},
-                .order_connection_socket{argv[7], argv[8]}
         };
 
-	Feed<Schema::Packet> feed{config};
+	Feed<Schema::Packet> feed{config, { argv[5], argv[6], argv[7], argv[8] }};
 
 
         while (true) {
