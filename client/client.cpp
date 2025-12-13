@@ -45,7 +45,7 @@ int main() {
     std::cout << "Timestamp: " << order.timestamp << "\n";
     std::cout << "Side: " << order.side << "\n";
     std::cout << "Quantity: " << order.quantity << "\n";
-    std::cout << "Price: " << order.price << " pennies\n";
+    std::cout << "Price: " << order.price << "\n";
 
     close(client_fd);
     close(server_fd);
