@@ -8,7 +8,7 @@ The program works for C++17 compilers or greater.
 ## Details
 Information about the name of the stock, the maximum order quantity, and the VWAP window are passed as command line arguments. The feed server recieves quotes and trades and keeps track of the timestamps, prices, and quantities, and uses this to determine when a order can be sent to the client. There must be at least one trade processed before an order can be made, because a trade has information that is incorporated into the VWAP calculation which determines when a new order can be made.
 
-On reciept of a new quote or trade, its timestamp is compared against the earliest timestamp seen in the VWAP window. If the difference (in seconds) is greater than the max window time period given as a command line argument, we check if a trade has been seen earlier. If so, a new order can be made. The quantity that is ultimately chosen to be sent is subtracted from the latest quote.
+On reciept of a new quote or trade, its timestamp is compared against the earliest timestamp seen in the VWAP window. If the difference (in seconds) is greater than the max window time period given as a command line argument, we check if a trade has been seen earlier. If so, a new order can be made.
 
 The format classes are contained in a namespace `Schema`. Padding is disabled for these classes with a `#pragma pack` statement.
 

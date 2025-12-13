@@ -205,7 +205,7 @@ class Feed {
 
 template <class Packet>
 auto Feed<Packet>::process_order_impl(std::uint64_t timestamp, double vwap) {
-  std::uint32_t price, *quantity;
+  std::uint32_t price, quantity;
   bool betterThan = false;
 
   Schema::Order order{};
@@ -215,17 +215,16 @@ auto Feed<Packet>::process_order_impl(std::uint64_t timestamp, double vwap) {
 
   if (p_args.side == 'B') {
     std::tie(price, quantity, betterThan) = std::forward_as_tuple(
-        current_quote->ask_price, &current_quote->ask_quantity,
+        current_quote->ask_price, current_quote->ask_quantity,
         current_quote->ask_price < vwap);
   } else {
     std::tie(price, quantity, betterThan) = std::forward_as_tuple(
-        current_quote->bid_price, &current_quote->bid_quantity,
+        current_quote->bid_price, current_quote->bid_quantity,
         current_quote->bid_price > vwap);
   }
   return [=](auto&& callable) mutable {
-    if (*quantity > 0 && betterThan) {
+    if (quantity > 0 && betterThan) {
       (decltype(callable)(callable))(order, price, *quantity);
-      *quantity -= order.quantity;
     }
   };
 }
