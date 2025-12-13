@@ -224,7 +224,7 @@ auto Feed<Packet>::process_order_impl(std::uint64_t timestamp, double vwap) {
   }
   return [=](auto&& callable) mutable {
     if (quantity > 0 && betterThan) {
-      (decltype(callable)(callable))(order, price, *quantity);
+      (decltype(callable)(callable))(order, price, quantity);
     }
   };
 }
