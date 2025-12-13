@@ -12,35 +12,6 @@
 #include <variant>
 
 namespace detail {
-    template<class T>
-    struct optional : std::optional<T> {
-       using std::optional<T>::optional;
-       using std::optional<T>::operator=;
-
-       template<class Callable>
-       auto and_then(Callable&& callable) {
-        if (*this) {
-            std::invoke(std::forward<Callable>(callable), *this, this->value());
-        }
-	return *this;
-       }
-
-       template<class Callable>
-	auto value_if(Callable&& callable) {
-		if (std::forward<Callable>(callable)(this->value())) {
-			return *this;
-		}
-		return detail::optional<T>{};
-	}
-       template<class Callable>
-       auto or_else(Callable&& callable) {
-        if (!*this) {
-            std::forward<Callable>(callable)(*this);
-        }
-	return *this;
-       }
-    };
-
     template<class... Ts>
     struct overloads : Ts... {
 	using Ts::operator()...;
@@ -112,56 +83,16 @@ namespace Schema {
         	std::uint32_t quantity;
         	std::uint32_t price;
 	};
-	#pragma pack(pop)
 
         struct Packet {
-                #pragma pack(push, 1)
                 struct Header {
                         std::uint8_t length;
                         std::uint8_t type;
                 } header;
-                #pragma pack(pop)
                 std::variant<Quote, Trade> body;
         };
+	#pragma pack(pop)
 }
-
-auto process_order(std::string_view symbol, char side, std::uint64_t timestamp, double vwap, std::optional<Schema::Quote>& quote) {
-	std::uint32_t price, *quantity;
-	bool betterThan = false;
-
-	Schema::Order order{};
-        strncpy(order.symbol, symbol.data(), symbol.size());
-        order.timestamp = timestamp;
-        order.side = side;
-
-	if (side == 'B') {
-		price = quote->ask_price;
-		quantity = &quote->ask_quantity;
-		betterThan = quote->ask_price < vwap;
-	} else {
-		price = quote->bid_price;
-		quantity = &quote->bid_quantity;
-		betterThan = quote->bid_price > vwap;
-	}
-	return [=](auto&& callable) mutable {
-		if (*quantity > 0 && betterThan) {
-			(decltype(callable)(callable))(order, price, *quantity);
-			*quantity -= order.quantity;
-		}
-	};
-}
-
-template<class Packet>
-struct packet_reader {
-	bool read_header(int sockfd, Packet& packet) {
-		return read(sockfd, &packet.header, sizeof packet.header) == sizeof packet.header;
-	}
-
-	template<class Body>
-	bool read_body(int sockfd, Body& body) {
-		return read(sockfd, &body, sizeof(Body)) == sizeof(Body);
-	}
-};
 
 template<class Packet>
 struct Feed {
@@ -175,6 +106,12 @@ struct Feed {
 	using Trade = Schema::Trade;
 	using Quote = Schema::Quote;
 	using Order = Schema::Order;
+
+private:
+	struct packet_reader;
+public:
+
+	auto process_order_impl(std::uint64_t timestamp, double vwap);
 
 	void forward() {
 		if (!p_args.market_data_socket)
@@ -219,7 +156,7 @@ struct Feed {
 	}
 
 	void process_order(std::uint64_t timestamp) {
-                ::process_order(p_args.symbol, p_args.side, timestamp, pq_sum / q_sum, current_quote)
+                process_order_impl(timestamp, pq_sum / q_sum)
                        	([&] (Order order, std::uint32_t price, std::uint32_t quantity) {
                                	order.price = price;
                                 order.quantity = std::min(quantity, p_args.max_order_size);
@@ -231,14 +168,14 @@ struct Feed {
 	}
 private:
 	Config& p_args;
-	detail::optional<Quote> current_quote;
+	std::optional<Quote> current_quote;
 	Packet current_packet;
 	std::optional<std::uint64_t> first_timestamp;
+	packet_reader reader;
 	int market_sockfd;
 	int pq_sum = 0;
         int q_sum = 0;
 	bool seen_trade = false;
-	packet_reader<Packet> reader;
 private:
 
 	template<class B>
@@ -253,7 +190,41 @@ private:
                         std::cout << "New timestamp: " << (body.timestamp) << '\n';
                 }
 	}
+
+	struct packet_reader {
+        	bool read_header(int sockfd, Packet& packet) {
+                	return read(sockfd, &packet.header, sizeof packet.header) == sizeof packet.header;
+        	}
+
+        	template<class Body>
+        	bool read_body(int sockfd, Body& body) {
+                	return read(sockfd, &body, sizeof(Body)) == sizeof(Body);
+        	}
+	};
 };
+
+template<class Packet>
+auto Feed<Packet>::process_order_impl(std::uint64_t timestamp, double vwap) {
+        std::uint32_t price, *quantity;
+        bool betterThan = false;
+
+        Schema::Order order{};
+        strncpy(order.symbol, p_args.symbol.data(), symbol_length);
+        order.timestamp = timestamp;
+        order.side = p_args.side;
+
+        if (p_args.side == 'B') {
+                std::tie(price, quantity, betterThan) = std::forward_as_tuple(current_quote->ask_price, &current_quote->ask_quantity, current_quote->ask_price < vwap);
+        } else {
+                std::tie(price, quantity, betterThan) = std::forward_as_tuple(current_quote->bid_price, &current_quote->bid_quantity, current_quote->bid_price > vwap);
+        }
+        return [=](auto&& callable) mutable {
+                if (*quantity > 0 && betterThan) {
+                        (decltype(callable)(callable))(order, price, *quantity);
+                        *quantity -= order.quantity;
+                }
+        };
+}
 
 int main(int argc, char* argv[]) {
         using namespace std::chrono_literals;
