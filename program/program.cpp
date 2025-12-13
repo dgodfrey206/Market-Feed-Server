@@ -81,32 +81,44 @@ struct Config {
         connection order_connection_socket;
 };
 
-#pragma pack(push, 1)
-struct Quote {
-        char symbol[symbol_length];
-        std::uint64_t timestamp;
-        std::uint32_t bid_quantity, bid_price;
-        std::uint32_t ask_quantity, ask_price;
-};
+namespace Schema {
+	#pragma pack(push, 1)
+	struct Quote {
+        	char symbol[symbol_length];
+        	std::uint64_t timestamp;
+        	std::uint32_t bid_quantity, bid_price;
+        	std::uint32_t ask_quantity, ask_price;
+	};
 
-struct Trade {
-        char symbol[symbol_length];
-        std::uint64_t timestamp;
-        std::uint32_t quantity;
-        std::uint32_t price;
-};
+	struct Trade {
+        	char symbol[symbol_length];
+        	std::uint64_t timestamp;
+        	std::uint32_t quantity;
+        	std::uint32_t price;
+	};
 
-struct Order {
-        char symbol[symbol_length];
-        std::uint64_t timestamp;
-        char side;
-        std::uint32_t quantity;
-        std::uint32_t price;
-};
-#pragma pack(pop)
+	struct Order {
+        	char symbol[symbol_length];
+        	std::uint64_t timestamp;
+        	char side;
+        	std::uint32_t quantity;
+        	std::uint32_t price;
+	};
+	#pragma pack(pop)
 
-detail::optional<Trade> parse_trade_format(int sockfd, std::uint8_t totalBytes) {
-        Trade t{};
+        struct Packet {
+                #pragma pack(push, 1)
+                struct Header {
+                        std::uint8_t length;
+                        std::uint8_t type;
+                } header;
+                #pragma pack(pop)
+                std::variant<Quote, Trade> body;
+        };
+}
+
+detail::optional<Schema::Trade> parse_trade_format(int sockfd, std::uint8_t totalBytes) {
+        Schema::Trade t{};
         std::size_t bytes = 0;
         bytes += read(sockfd, t.symbol, symbol_length);
         bytes += read(sockfd, &t.timestamp, sizeof(t.timestamp));
@@ -119,8 +131,8 @@ detail::optional<Trade> parse_trade_format(int sockfd, std::uint8_t totalBytes) 
         return std::nullopt;
 }
 
-detail::optional<Quote> parse_quote_format(int sockfd, std::uint8_t totalBytes) {
-        Quote q{};
+detail::optional<Schema::Quote> parse_quote_format(int sockfd, std::uint8_t totalBytes) {
+        Schema::Quote q{};
         std::size_t bytes = 0;
         bytes += read(sockfd, q.symbol, symbol_length);
 	std::cout << "symbol bytes read: " << bytes << ", symbol = " << q.symbol << '\n';
@@ -145,7 +157,7 @@ auto parse_quote(int sockfd, std::string_view symbol, std::uint8_t totalBytes) {
 	std::cout << "bid_price: " << quote->bid_price << '\n';
 	std::cout << "ask_quantity: " << quote->ask_quantity << '\n';
 	std::cout << "ask_price: " << quote->ask_price << '\n';
-        return quote.value_if([&](Quote const& q) {
+        return quote.value_if([&](Schema::Quote const& q) {
                 return strncmp(q.symbol, symbol.begin(), symbol_length) == 0;
         });
 }
@@ -158,16 +170,16 @@ auto parse_trade(int sockfd, std::string_view symbol, std::uint8_t totalBytes) {
 	std::cout << "quantity: " << trade->quantity << '\n';
 	std::cout << "price: " << trade->price << '\n';
 
-        return trade.value_if([&](Trade const& t) {
+        return trade.value_if([&](Schema::Trade const& t) {
                 return strncmp(t.symbol, symbol.begin(), symbol_length) == 0;
         });
 }
 
-auto process_order(std::string_view symbol, char side, std::uint64_t timestamp, double vwap, std::optional<Quote>& quote) {
+auto process_order(std::string_view symbol, char side, std::uint64_t timestamp, double vwap, std::optional<Schema::Quote>& quote) {
 	std::uint32_t price, *quantity;
 	bool betterThan = false;
 
-	Order order{};
+	Schema::Order order{};
         strncpy(order.symbol, symbol.data(), symbol.size());
         order.timestamp = timestamp;
         order.side = side;
@@ -189,27 +201,6 @@ auto process_order(std::string_view symbol, char side, std::uint64_t timestamp, 
 	};
 }
 
-struct Packet {
-	struct Header {
-		std::uint8_t length;
-		std::uint8_t type;
-	};
-	std::variant<Quote, Trade> packet;
-};
-
-namespace Schema {
-	struct Packet {
-	        struct Header {
-                	std::uint8_t length;
-                	std::uint8_t type;
-        	} header;
-        	std::variant<Quote, Trade> body;
-	};
-};
-
-//template<class Schema>
-//struct Feed;
-
 template<class Packet>
 struct Feed {
 	Feed() = delete;
@@ -218,10 +209,10 @@ struct Feed {
 		market_sockfd(p_args.market_data_socket.handle())
 	{ }
 
-	template<class T>
-	struct tag {};
-
 	using Header = typename Packet::Header;
+	using Trade = Schema::Trade;
+	using Quote = Schema::Quote;
+	using Order = Schema::Order;
 
 	void parse(Quote& quote, std::string_view symbol, std::size_t len) {
 		auto temp = parse_quote(market_sockfd, symbol, len);
@@ -305,6 +296,7 @@ private:
 	int pq_sum = 0;
         int q_sum = 0;
 	bool seen_trade = false;
+	Parser<Packet> parser;
 private:
 };
 
