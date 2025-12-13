@@ -56,6 +56,7 @@ int main() {
             std::cout << "Side: " << order.side << "\n";
             std::cout << "Quantity: " << order.quantity << "\n";
             std::cout << "Price: " << order.price << "\n";
+	    std::cout << "------------------------------------\n";
         }
 
         close(client_fd);

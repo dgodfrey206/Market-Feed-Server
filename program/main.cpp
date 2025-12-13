@@ -296,7 +296,6 @@ private:
 	int pq_sum = 0;
         int q_sum = 0;
 	bool seen_trade = false;
-	Parser<Packet> parser;
 private:
 };
 
