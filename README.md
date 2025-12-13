@@ -1,5 +1,5 @@
 
-## Market Feed Server
+# Market Feed Server
 Market Data Server receives serialized packets over a TCP connection. The packets represent quotes and trades for stocks. As the data is passed through a VWAP calculation is performed, and an order is sent to another socket connection when the order condition is ideal.
 
 ## Compiler requirements
