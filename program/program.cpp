@@ -262,15 +262,6 @@ struct Feed {
                 if (current_packet.header.length <= 0)
                         return;
 
-		/*if (packet.header.type == 1) {
-			packet.body.emplace(Quote{});
-			parse(tag<Quote>{}, p_args.symbol, packet.header.length);
-		} else {
-			packet.body.emplace(Trade{});
-			parse(tag<Trade>{}, p_args.symbol, packet.header.length);
-			try_process_order();
-		}*/
-
 		if (current_packet.header.type == 1) {
 			current_packet.body = Quote{};
 		} else {
