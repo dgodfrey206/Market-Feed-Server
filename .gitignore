@@ -1,0 +1,53 @@
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+
+# Executables
+*.out
+*.app
+
+# Visual Studio
+x64
+.vs
+Debug
+*.filters
+*.user
+
+# Python
+__pycache__
+
+#CMake
+CMakeFiles
+CMakeCache.txt
+out
+
+# MxEngine
+imgui.ini
+profile_log.json
+compile_commands.json
+external_libraries/*.lib
+python
+boost_headers
+Vendors
+Debug
