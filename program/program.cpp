@@ -189,14 +189,16 @@ auto process_order(std::string_view symbol, char side, std::uint64_t timestamp, 
 	};
 }
 
-template<class T>
-struct tag {};
-
 struct Feed {
-	Feed(Config p_args) :
-		p_args(p_args),
-		market_sock(p_args.market_data_socket.handle())
+	Feed() = delete;
+	Feed(Config& config) :
+		p_args(config),
+		market_sockfd(p_args.market_data_socket.handle())
 	{ }
+
+	template<class T>
+	struct tag {};
+
 	void parse(tag<Quote>, std::string_view symbol, std::size_t len) {
 		parse_quote(market_sockfd, symbol, len).and_then([&](auto&&, auto&& quote) {
                 	std::cout << "Successfully parsed quote\n";
@@ -205,7 +207,7 @@ struct Feed {
 	}
 
 	void parse(tag<Trade>, std::string_view symbol, std::size_t len) {
-		current_trade = parse_trade(market_sockfd, config.symbol, len);
+		current_trade = parse_trade(market_sockfd, p_args.symbol, len);
                 current_trade.and_then([&](auto&& self, Trade const& t) {
                 	std::cout << "Updating values\n";
                         pq_sum += t.price * t.quantity;
@@ -217,10 +219,13 @@ struct Feed {
                 });
 	}
 
-	void process_packet() {
+	void forward() {
+		if (!p_args.market_data_socket)
+			return;
 		std::byte header[sizeof(std::uint8_t) * 2];
                 ssize_t n = read(market_sockfd, header, sizeof header);
                 std::cout << "bytes read from header = " << n << '\n';
+		std::cout << errno << '\n';
                 if (n < 0)
                         return;
 
@@ -228,12 +233,12 @@ struct Feed {
                 std::uint8_t type = std::to_integer<std::uint8_t>(header[1]);
                 std::cout << "len = " << (int)len << " type = " << (int)type << '\n';
                 if (len <= 0)
-                        break;
+                        return;
 
 		if (type == 1) {
-			parse(tag<Quote>{}, market_sockfd, config.symbol, len);
+			parse(tag<Quote>{}, p_args.symbol, len);
 		} else {
-			parse(tag<Trade>{}, market_sockfd, config.symbol, len);
+			parse(tag<Trade>{}, p_args.symbol, len);
 			try_process_order();
 		}
 	}
@@ -241,15 +246,15 @@ struct Feed {
 	void try_process_order() {
 		double diff = (current_trade->timestamp - first_timestamp.value()) / 1'000'000'000ULL;
                 std::cout << "Timestamp diff: " << diff << '\n';
-                std::cout << "is " << config.vwap_window_period << " second window reached? " << std::boolalpha << (diff >= config.vwap_window_peri>
+                std::cout << "is " << p_args.vwap_window_period << " second window reached? " << std::boolalpha << (diff >= p_args.vwap_window_period) << '\n';
 
                 // if the duration has been reached (trade.timestamp - first_timestamp)
-                if (current_quote && current_trade && diff >= config.vwap_window_period) {
-                	process_order(config.symbol, config.side, current_trade->timestamp, pq_sum / q_sum, current_quote)
+                if (current_quote && current_trade && diff >= p_args.vwap_window_period) {
+                	process_order(p_args.symbol, p_args.side, current_trade->timestamp, pq_sum / q_sum, current_quote)
                         	([&] (Order order, std::uint32_t price, std::uint32_t quantity) {
                                 	order.price = price;
-                                        order.quantity = std::min(quantity, config.max_order_size);
-                                        send(p_args.order_connect_socket.handle(), &order, sizeof(order), 0);
+                                        order.quantity = std::min(quantity, p_args.max_order_size);
+                                        send(p_args.order_connection_socket.handle(), &order, sizeof(order), 0);
                                  });
 
                         pq_sum = q_sum = 0;
@@ -257,15 +262,13 @@ struct Feed {
                 }
 	}
 private:
-	Config p_args;
-	std::optional<Quote> current_quote;
-	std::optional<Trade> current_trade;
+	Config& p_args;
+	detail::optional<Quote> current_quote;
+	detail::optional<Trade> current_trade;
+	std::optional<std::uint64_t> first_timestamp;
 	int market_sockfd;
-	std::uint64_t first_timestamp;
 	int pq_sum = 0;
         int q_sum = 0;
-private:
-	
 };
 
 int main(int argc, char* argv[]) {
@@ -285,65 +288,12 @@ int main(int argc, char* argv[]) {
                 .order_connection_socket{argv[7], argv[8]}
         };
 
-        detail::optional<Quote> last_quote;
-        std::optional<std::uint64_t> first_timestamp;
-        int market_sockfd = config.market_data_socket.handle();
-        int order_sockfd = config.order_connection_socket.handle();
-        int pq_sum = 0;
-        int q_sum = 0;
-
 	Feed feed{config};
 
+
         while (true) {
-                if (!config.market_data_socket)
-                        break;
+		feed.forward();
 
-                /*std::byte header[sizeof(std::uint8_t) * 2];
-                ssize_t n = read(market_sockfd, header, sizeof header);
-		std::cout << "bytes read from header = " << n << '\n';
-                if (n < 0)
-                        break;
-
-                std::uint8_t len = std::to_integer<std::uint8_t>(header[0]);
-                std::uint8_t type = std::to_integer<std::uint8_t>(header[1]);
-		std::cout << "len = " << (int)len << " type = " << (int)type << '\n';
-                if (len <= 0)
-                        break;
-
-                if (type == 1) {
-                        parse_quote(market_sockfd, config.symbol, len).and_then([&](auto&& self, auto&& quote) {
-			    std::cout << "Successfully parsed quote\n";
-                            last_quote = quote;
-                        });
-                } else {
-                        auto trade = parse_trade(market_sockfd, config.symbol, len);
-                        trade.and_then([&](auto&& self, Trade const& t) {
-				std::cout << "Updating values\n";
-                                pq_sum += t.price * t.quantity;
-                                q_sum += t.quantity;
-				if (!first_timestamp) first_timestamp = t.timestamp;
-                        }).or_else([&] (auto&& self) {
-                                perror("Something went wrong parsing the trade. Aborting...");
-                                std::exit(1);
-                        });
-
-			double diff = (trade->timestamp - first_timestamp.value()) / 1'000'000'000ULL;
-			std::cout << "Timestamp diff: " << diff << '\n';
-			std::cout << "is " << config.vwap_window_period << " second window reached? " << std::boolalpha << (diff >= config.vwap_window_period) << '\n';
-
-                        // if the duration has been reached (trade.timestamp - first_timestamp)
-                        if (last_quote && trade && diff >= config.vwap_window_period) {
-				process_order(config.symbol, config.side, trade->timestamp, pq_sum / q_sum, last_quote)
-					([&] (Order order, std::uint32_t price, std::uint32_t quantity) {
-						order.price = price;
-						order.quantity = std::min(quantity, config.max_order_size);
-						send(order_sockfd, &order, sizeof(order), 0);
-                                	});
-
-                                pq_sum = q_sum = 0;
-                                first_timestamp = trade->timestamp;
-                        }
-                }*/
 		std::this_thread::sleep_for(200ms);
         }
 }
