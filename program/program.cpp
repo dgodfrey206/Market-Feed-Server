@@ -189,6 +189,28 @@ auto process_order(std::string_view symbol, char side, std::uint64_t timestamp, 
 	};
 }
 
+struct Packet {
+	struct Header {
+		std::uint8_t length;
+		std::uint8_t type;
+	};
+	std::variant<Quote, Trade> packet;
+};
+
+namespace Schema {
+	struct Packet {
+	        struct Header {
+                	std::uint8_t length;
+                	std::uint8_t type;
+        	};
+        	
+	}
+};
+
+//template<class Schema>
+//struct Feed;
+
+template<class Packet>
 struct Feed {
 	Feed() = delete;
 	Feed(Config& config) :
@@ -198,6 +220,8 @@ struct Feed {
 
 	template<class T>
 	struct tag {};
+
+	using Header = typename Packet::Header;
 
 	void parse(tag<Quote>, std::string_view symbol, std::size_t len) {
 		parse_quote(market_sockfd, symbol, len).and_then([&](auto&&, auto&& quote) {
@@ -222,23 +246,21 @@ struct Feed {
 	void forward() {
 		if (!p_args.market_data_socket)
 			return;
-		std::byte header[sizeof(std::uint8_t) * 2];
-                ssize_t n = read(market_sockfd, header, sizeof header);
+		Header header;
+                ssize_t n = read(market_sockfd, &header, sizeof header);
                 std::cout << "bytes read from header = " << n << '\n';
-		std::cout << errno << '\n';
+
                 if (n < 0)
                         return;
 
-		std::uint8_t len = std::to_integer<std::uint8_t>(header[0]);
-                std::uint8_t type = std::to_integer<std::uint8_t>(header[1]);
-                std::cout << "len = " << (int)len << " type = " << (int)type << '\n';
-                if (len <= 0)
+                std::cout << "len = " << (int)header.length << " type = " << (int)header.type << '\n';
+                if (header.length <= 0)
                         return;
 
-		if (type == 1) {
-			parse(tag<Quote>{}, p_args.symbol, len);
+		if (header.type == 1) {
+			parse(tag<Quote>{}, p_args.symbol, header.length);
 		} else {
-			parse(tag<Trade>{}, p_args.symbol, len);
+			parse(tag<Trade>{}, p_args.symbol, header.length);
 			try_process_order();
 		}
 	}
@@ -269,6 +291,7 @@ private:
 	int market_sockfd;
 	int pq_sum = 0;
         int q_sum = 0;
+private:
 };
 
 int main(int argc, char* argv[]) {
