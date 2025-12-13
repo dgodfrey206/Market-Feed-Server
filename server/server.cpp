@@ -96,13 +96,13 @@ int main(int argc, char* argv[]) {
     // --- choose which to send ---
     bool send_quote = false;
     while (1) {
-    if (send_quote) {
+      if (send_quote) {
 	send_quote_impl();
-    } else {
+      } else {
 	send_trade_impl();
-    }
-    timestamp += 5'000'000'000ULL;
-    std::this_thread::sleep_for(500ms);
+      }
+      //timestamp += 5'000'000'000ULL;
+      std::this_thread::sleep_for(500ms);
     }
 
     close(client_fd);
