@@ -5,11 +5,13 @@
 #include <cstring>
 #include <iostream>
 
+// Client program for testing
+
 #pragma pack(push, 1)
 struct Order {
 	char symbol[8];
 	uint64_t timestamp;
-	char side; // 'B' = Buy, 'S' = Sell
+	char side;
 	uint32_t quantity;
 	int32_t price;
 };

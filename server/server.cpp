@@ -8,10 +8,12 @@
 #include <chrono>
 using namespace std::chrono_literals;
 
+// Server program for testing
+
 #pragma pack(push, 1)
 struct Header {
-    uint8_t length;  // Body length in bytes
-    uint8_t type;    // 1 = Quote, 2 = Trade
+    uint8_t length;
+    uint8_t type;
 };
 
 struct Quote {
