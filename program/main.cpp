@@ -40,6 +40,14 @@ namespace detail {
 	return *this;
        }
     };
+
+    template<class... Ts>
+    struct overloads : Ts... {
+	using Ts::operator()...;
+    };
+
+    template<class... Ts>
+    overloads(Ts...) -> overloads<Ts...>;
 }
 
 struct connection {
@@ -202,6 +210,18 @@ auto process_order(std::string_view symbol, char side, std::uint64_t timestamp, 
 }
 
 template<class Packet>
+struct Parser {
+	bool read_header(int sockfd, Packet& packet) {
+		return read(sockfd, &packet.header, sizeof packet.header) == sizeof packet.header;
+	}
+
+	template<class Body>
+	bool read_body(int sockfd, Body& body) {
+		return read(sockfd, &body, sizeof(Body)) == sizeof(Body);
+	}
+};
+
+template<class Packet>
 struct Feed {
 	Feed() = delete;
 	Feed(Config& config) :
@@ -243,13 +263,10 @@ struct Feed {
 		if (!p_args.market_data_socket)
 			return;
 
-                ssize_t n = read(market_sockfd, &current_packet.header, sizeof current_packet.header);
-                std::cout << "bytes read from header = " << n << '\n';
+		if (!parser.read_header(market_sockfd, current_packet))
+			return;
 
-                if (n < 0)
-                        return;
-
-                std::cout << "len = " << (int)current_packet.header.length << " type = " << (int)current_packet.header.type << '\n';
+                std::cout << "Header length = " << (int)current_packet.header.length << "; Header type = " << (int)current_packet.header.type << '\n';
                 if (current_packet.header.length <= 0)
                         return;
 
@@ -259,20 +276,28 @@ struct Feed {
 			current_packet.body = Trade{};
 		}
 
-		std::visit([this](auto&& body) {
-			parse(body, p_args.symbol, current_packet.header.length);
+		auto process_packet_body = [this](auto&& body, auto&& callable) {
+			parser.read_body(market_sockfd, body);
+			if (strncmp(body.symbol, p_args.symbol.begin(), symbol_length) == 0) {
+				callable();
+			}
 			if (!first_timestamp) first_timestamp = body.timestamp;
+			try_process_order(body);
+		};
 
-			int diff = (body.timestamp - first_timestamp.value()) / 1'000'000'000ULL;
-			std::cout << "body.timestamp: " << body.timestamp << '\n';
-			std::cout << "Timestamp diff: " << diff << '\n';
-               		std::cout << "is " << p_args.vwap_window_period << " second window reached? " << std::boolalpha << (diff >= p_args.vwap_window_period) << '\n';
-			if (current_quote && seen_trade && diff >= p_args.vwap_window_period) {
-				std::cout << "PROCESSING ORDER\n";
-				process_order(body.timestamp);
-				std::cout << "New timestamp: " << (body.timestamp) << '\n';
+		std::visit(detail::overloads{
+			[&](Quote& body) {
+				process_packet_body(body, [&] { current_quote = body; });
+			},
+			[&](Trade& body) {
+				process_packet_body(body, [&] {
+					pq_sum += body.price * body.quantity;
+                                	q_sum += body.quantity;
+                                	seen_trade = true;
+				});
 			}
 		}, current_packet.body);
+
 		std::cout << "---------------------------------\n";
 	}
 
@@ -296,7 +321,21 @@ private:
 	int pq_sum = 0;
         int q_sum = 0;
 	bool seen_trade = false;
+	Parser<Packet> parser;
 private:
+
+	template<class B>
+	void try_process_order(B& body) {
+		int diff = (body.timestamp - first_timestamp.value()) / 1'000'000'000ULL;
+                std::cout << "body.timestamp: " << body.timestamp << '\n';
+                std::cout << "Timestamp diff: " << diff << '\n';
+                std::cout << "is " << p_args.vwap_window_period << " second window reached? " << std::boolalpha << (diff >= p_args.vwap_window_period) << '\n';
+                if (current_quote && seen_trade && diff >= p_args.vwap_window_period) {
+                	std::cout << "PROCESSING ORDER\n";
+                        process_order(body.timestamp);
+                        std::cout << "New timestamp: " << (body.timestamp) << '\n';
+                }
+	}
 };
 
 int main(int argc, char* argv[]) {
