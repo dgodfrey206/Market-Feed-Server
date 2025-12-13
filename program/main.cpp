@@ -3,7 +3,6 @@
 #include <unistd.h>
 
 #include <cassert>
-#include <chrono>
 #include <iostream>
 #include <optional>
 #include <thread>
@@ -232,8 +231,6 @@ auto Feed<Packet>::process_order_impl(std::uint64_t timestamp, double vwap) {
 }
 
 int main(int argc, char* argv[]) {
-  using namespace std::chrono_literals;
-
   if (argc < 9) {
     std::cout << "Invalid number of arguments\n";
     std::exit(1);
@@ -250,7 +247,5 @@ int main(int argc, char* argv[]) {
 
   while (true) {
     feed.forward();
-
-    std::this_thread::sleep_for(200ms);
   }
 }
