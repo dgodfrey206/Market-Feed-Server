@@ -125,64 +125,6 @@ namespace Schema {
         };
 }
 
-detail::optional<Schema::Trade> parse_trade_format(int sockfd, std::uint8_t totalBytes) {
-        Schema::Trade t{};
-        std::size_t bytes = 0;
-        bytes += read(sockfd, t.symbol, symbol_length);
-        bytes += read(sockfd, &t.timestamp, sizeof(t.timestamp));
-	bytes += read(sockfd, &t.quantity, sizeof(t.quantity));
-        bytes += read(sockfd, &t.price, sizeof(t.price));
-
-	std::cout << "Trade Bytes read: " << bytes << '\n';
-        if (bytes == totalBytes)
-            return t;
-        return std::nullopt;
-}
-
-detail::optional<Schema::Quote> parse_quote_format(int sockfd, std::uint8_t totalBytes) {
-        Schema::Quote q{};
-        std::size_t bytes = 0;
-        bytes += read(sockfd, q.symbol, symbol_length);
-	std::cout << "symbol bytes read: " << bytes << ", symbol = " << q.symbol << '\n';
-        bytes += read(sockfd, &q.timestamp, sizeof(q.timestamp));
-        bytes += read(sockfd, &q.bid_quantity, sizeof(q.bid_quantity));
-        bytes += read(sockfd, &q.bid_price, sizeof(q.bid_price));
-        bytes += read(sockfd, &q.ask_quantity, sizeof(q.ask_quantity));
-        bytes += read(sockfd, &q.ask_price, sizeof(q.ask_price));
-        std::cout << "Quote bytes read: " << bytes << '\n';
-	if (bytes == totalBytes)
-            return q;
-        return std::nullopt;
-}
-
-auto parse_quote(int sockfd, std::string_view symbol, std::uint8_t totalBytes) {
-        // only set if the symbol is equal to config.symbol
-        auto quote = parse_quote_format(sockfd, totalBytes);
-	std::cout << "New Quote: \n";
-	std::cout << "symbol: " << quote->symbol << '\n';
-	std::cout << "timestamp: " << quote->timestamp << '\n';
-	std::cout << "bid_quantity: " << quote->bid_quantity << '\n';
-	std::cout << "bid_price: " << quote->bid_price << '\n';
-	std::cout << "ask_quantity: " << quote->ask_quantity << '\n';
-	std::cout << "ask_price: " << quote->ask_price << '\n';
-        return quote.value_if([&](Schema::Quote const& q) {
-                return strncmp(q.symbol, symbol.begin(), symbol_length) == 0;
-        });
-}
-
-auto parse_trade(int sockfd, std::string_view symbol, std::uint8_t totalBytes) {
-        auto trade = parse_trade_format(sockfd, totalBytes);
-	std::cout << "New Trade: \n";
-	std::cout << "symbol: " << trade->symbol << '\n';
-	std::cout << "timestamp: " << trade->timestamp << '\n';
-	std::cout << "quantity: " << trade->quantity << '\n';
-	std::cout << "price: " << trade->price << '\n';
-
-        return trade.value_if([&](Schema::Trade const& t) {
-                return strncmp(t.symbol, symbol.begin(), symbol_length) == 0;
-        });
-}
-
 auto process_order(std::string_view symbol, char side, std::uint64_t timestamp, double vwap, std::optional<Schema::Quote>& quote) {
 	std::uint32_t price, *quantity;
 	bool betterThan = false;
@@ -210,7 +152,7 @@ auto process_order(std::string_view symbol, char side, std::uint64_t timestamp, 
 }
 
 template<class Packet>
-struct Parser {
+struct packet_reader {
 	bool read_header(int sockfd, Packet& packet) {
 		return read(sockfd, &packet.header, sizeof packet.header) == sizeof packet.header;
 	}
@@ -234,36 +176,11 @@ struct Feed {
 	using Quote = Schema::Quote;
 	using Order = Schema::Order;
 
-	void parse(Quote& quote, std::string_view symbol, std::size_t len) {
-		auto temp = parse_quote(market_sockfd, symbol, len);
-
-		if (temp) {
-                	std::cout << "Successfully parsed quote\n";
-                        current_quote = temp;
-			quote = temp.value();
-			std::cout << "Hello\n";
-                };
-	}
-
-	void parse(Trade& trade, std::string_view symbol, std::size_t len) {
-		auto temp = parse_trade(market_sockfd, p_args.symbol, len);
-                temp.and_then([&](auto&& self, Trade const& t) {
-                	std::cout << "Updating values\n";
-                        pq_sum += t.price * t.quantity;
-                        q_sum += t.quantity;
-			trade = t;
-			seen_trade = true;
-                }).or_else([&] (auto&& self) {
-                	perror("Something went wrong parsing the trade. Aborting...");
-                        std::exit(1);
-                });
-	}
-
 	void forward() {
 		if (!p_args.market_data_socket)
 			return;
 
-		if (!parser.read_header(market_sockfd, current_packet))
+		if (!reader.read_header(market_sockfd, current_packet))
 			return;
 
                 std::cout << "Header length = " << (int)current_packet.header.length << "; Header type = " << (int)current_packet.header.type << '\n';
@@ -277,7 +194,7 @@ struct Feed {
 		}
 
 		auto process_packet_body = [this](auto&& body, auto&& callable) {
-			parser.read_body(market_sockfd, body);
+			reader.read_body(market_sockfd, body);
 			if (strncmp(body.symbol, p_args.symbol.begin(), symbol_length) == 0) {
 				callable();
 			}
@@ -321,7 +238,7 @@ private:
 	int pq_sum = 0;
         int q_sum = 0;
 	bool seen_trade = false;
-	Parser<Packet> parser;
+	packet_reader<Packet> reader;
 private:
 
 	template<class B>
