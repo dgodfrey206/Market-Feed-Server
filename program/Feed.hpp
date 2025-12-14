@@ -1,46 +1,42 @@
-#include "Socket.hpp"
-#include "Schema.hpp"
 #include "Config.hpp"
+#include "Schema.hpp"
+#include "Socket.hpp"
 
 #include <arpa/inet.h>
 #include <string.h>
 #include <unistd.h>
 
-#include <string_view>
-#include <variant>
-#include <optional>
 #include <cstdint>
 #include <iostream>
+#include <optional>
+#include <string_view>
+#include <variant>
 
 #ifndef FEED_HPP
 #define FEED_HPP
 
 namespace details {
-template <class... Ts>
-struct overloads : Ts... {
+template <class... Ts> struct overloads : Ts... {
   using Ts::operator()...;
 };
 
-template <class... Ts>
-overloads(Ts...) -> overloads<Ts...>;
-}  // namespace details
-
+template <class... Ts> overloads(Ts...) -> overloads<Ts...>;
+} // namespace details
 
 inline constexpr std::size_t symbol_length = 8;
 
-template <class Packet>
-class Feed {
+template <class Packet> class Feed {
   struct socket_addresses {
     std::string_view market_data_ip, market_data_port;
   };
 
   struct packet_reader {
-    bool read_header(int sockfd, Packet& packet) {
-      return read(sockfd, &packet.header, sizeof packet.header) == sizeof packet.header;
+    bool read_header(int sockfd, Packet &packet) {
+      return read(sockfd, &packet.header, sizeof packet.header) ==
+             sizeof packet.header;
     }
 
-    template <class Body>
-    bool read_body(int sockfd, Body& body) {
+    template <class Body> bool read_body(int sockfd, Body &body) {
       return read(sockfd, &body, sizeof(Body)) == sizeof(Body);
     }
   };
@@ -49,8 +45,8 @@ class Feed {
   using Trade = Schema::Trade;
   using Quote = Schema::Quote;
 
- private:
-  Config& p_args;
+private:
+  Config &p_args;
   socket_addresses addr;
   Socket market_connection;
   std::optional<Quote> current_quote_;
@@ -63,21 +59,23 @@ class Feed {
   bool seen_trade = false;
   int timestamp_diff = -1;
 
- public:
+public:
   Feed() = delete;
-  Feed(Config& config, socket_addresses addr);
+  Feed(Config &config, socket_addresses addr);
 
   void forward();
 
   bool ready() const {
-    return current_quote_ && seen_trade && timestamp_diff >= p_args.vwap_window_period;
+    return current_quote_ && seen_trade &&
+           timestamp_diff >= p_args.vwap_window_period;
   }
 
   void reset_window() {
-	pq_sum = q_sum = 0;
-	seen_trade = false;
-	timestamp_diff = -1;
-        std::visit([&](auto const& body) { first_timestamp = body.timestamp; }, current_packet.body);
+    pq_sum = q_sum = 0;
+    seen_trade = false;
+    timestamp_diff = -1;
+    std::visit([&](auto const &body) { first_timestamp = body.timestamp; },
+               current_packet.body);
   }
 
   std::optional<Quote> get_current_quote() const { return current_quote_; }
@@ -85,55 +83,59 @@ class Feed {
   double get_vwap() const { return pq_sum / q_sum; }
 };
 
-template<class Packet>
-Feed<Packet>::Feed(Config& config, socket_addresses addr)
-      : p_args(config),
-        addr(addr),
-        market_connection(addr.market_data_ip, addr.market_data_port),
-        market_sockfd(market_connection.handle()) {}
+template <class Packet>
+Feed<Packet>::Feed(Config &config, socket_addresses addr)
+    : p_args(config), addr(addr),
+      market_connection(addr.market_data_ip, addr.market_data_port),
+      market_sockfd(market_connection.handle()) {}
 
-template<class Packet>
-void Feed<Packet>::forward() {
-    if (!market_connection) return;
+template <class Packet> void Feed<Packet>::forward() {
+  if (!market_connection)
+    return;
 
-    if (!reader.read_header(market_sockfd, current_packet)) return;
+  if (!reader.read_header(market_sockfd, current_packet))
+    return;
 
-    std::cout << "Header length = " << (int)current_packet.header.length
-              << "; Header type = " << (int)current_packet.header.type << '\n';
-    if (current_packet.header.length <= 0) return;
+  std::cout << "Header length = " << (int)current_packet.header.length
+            << "; Header type = " << (int)current_packet.header.type << '\n';
+  if (current_packet.header.length <= 0)
+    return;
 
-    if (current_packet.header.type == 1) {
-      current_packet.body = Quote{};
-    } else {
-      current_packet.body = Trade{};
+  if (current_packet.header.type == 1) {
+    current_packet.body = Quote{};
+  } else {
+    current_packet.body = Trade{};
+  }
+
+  auto process_packet_body = [this](auto &&body, auto &&callable) {
+    if (!reader.read_body(market_sockfd, body)) {
+      perror("Failed to read packet body.");
+      return;
     }
+    if (strncmp(body.symbol, p_args.symbol.begin(), symbol_length) == 0) {
+      std::forward<decltype(callable)>(callable)();
+    }
+    if (!first_timestamp)
+      first_timestamp = body.timestamp;
 
-    auto process_packet_body = [this](auto&& body, auto&& callable) {
-      if (!reader.read_body(market_sockfd, body)) {
-        perror("Failed to read packet body.");
-        return;
-      }
-      if (strncmp(body.symbol, p_args.symbol.begin(), symbol_length) == 0) {
-        std::forward<decltype(callable)>(callable)();
-      }
-      if (!first_timestamp) first_timestamp = body.timestamp;
+    timestamp_diff =
+        (body.timestamp - first_timestamp.value()) / 1'000'000'000ULL;
 
-      timestamp_diff = (body.timestamp - first_timestamp.value()) / 1'000'000'000ULL;
+    std::cout << "Timestamp diff: " << timestamp_diff << '\n';
+  };
 
-      std::cout << "Timestamp diff: " << timestamp_diff << '\n';
-    };
-
-    std::visit(
-      details::overloads{[&](Quote& body) {
-        process_packet_body(body, [&] { current_quote_ = body; });
-      },
-      [&](Trade& body) {
-        process_packet_body(body, [&] {
-          pq_sum += body.price * body.quantity;
-          q_sum += body.quantity;
-          seen_trade = true;
+  std::visit(details::overloads{
+    [&](Quote &body) {
+      process_packet_body(body, [&] { current_quote_ = body; });
+    },
+    [&](Trade &body) {
+      process_packet_body(body, [&] {
+        pq_sum += body.price * body.quantity;
+        q_sum += body.quantity;
+        seen_trade = true;
       });
-    }}, current_packet.body);
+    }},
+  current_packet.body);
 }
 
 #endif
