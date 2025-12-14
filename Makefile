@@ -1,40 +1,47 @@
 CXX = g++
-CXXFLAGS = -std=c++17
+CXXFLAGS = -std=c++17 -Wall -Wextra -O2
 
 BIN = bin
+
+# Executables
+MAIN = $(BIN)/main
 SERVER = $(BIN)/server
 CLIENT = $(BIN)/client
-MAIN = $(BIN)/main
 
+# Source files
+MAIN_SRC = program/main.cpp program/OrderManager.cpp
 SERVER_SRC = server/server.cpp
 CLIENT_SRC = client/client.cpp
-MAIN_SRC = program/main.cpp
 
-.PHONY: all run_server run_client run_main clean
+.PHONY: all run_main run_server run_client clean
 
-all: $(BIN) $(SERVER) $(CLIENT) $(MAIN)
+all: $(BIN) $(MAIN) $(SERVER) $(CLIENT)
 
-# Make sure bin directory exists
+# Ensure bin directory exists
 $(BIN):
 	mkdir -p $(BIN)
 
+# Compile and link main
+$(MAIN): $(MAIN_SRC) | $(BIN)
+	$(CXX) $(CXXFLAGS) $^ -o $@
+
+# Compile and link server
 $(SERVER): $(SERVER_SRC) | $(BIN)
 	$(CXX) $(CXXFLAGS) $< -o $@
 
+# Compile and link client
 $(CLIENT): $(CLIENT_SRC) | $(BIN)
 	$(CXX) $(CXXFLAGS) $< -o $@
 
-$(MAIN): $(MAIN_SRC) | $(BIN)
-	$(CXX) $(CXXFLAGS) $< -o $@
+# Run targets
+run_main: $(MAIN)
+	./$(MAIN) IBM B 100 30 127.0.0.1 5000 127.0.0.1 5001
 
 run_server: $(SERVER)
 	./$(SERVER)
 
 run_client: $(CLIENT)
 	./$(CLIENT)
-
-run_main: $(MAIN)
-	./$(MAIN) IBM B 100 30 127.0.0.1 5000 127.0.0.1 5001
 
 clean:
 	rm -rf $(BIN)

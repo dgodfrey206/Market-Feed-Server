@@ -1,4 +1,5 @@
 #include "Feed.hpp"
+#include "OrderManager.hpp"
 
 #include <arpa/inet.h>
 #include <string.h>
@@ -24,9 +25,16 @@ int main(int argc, char* argv[]) {
       .vwap_window_period = static_cast<std::uint32_t>(std::stoul(argv[4])),
   };
 
-  Feed<Schema::Packet> feed{config, {argv[5], argv[6], argv[7], argv[8]}};
+  Feed<Schema::Packet> feed{config, {argv[5], argv[6]}};
+  OrderManager manager{config, argv[7], argv[8]};
 
   while (true) {
     feed.forward();
+
+    if (feed.ready()) {
+        auto quote = feed.get_current_quote();
+        manager.process_order(quote, feed.get_vwap());
+	feed.reset_window();
+    }
   }
 }
