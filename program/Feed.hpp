@@ -121,7 +121,6 @@ void Feed<Packet>::forward() {
       timestamp_diff = (body.timestamp - first_timestamp.value()) / 1'000'000'000ULL;
 
       std::cout << "Timestamp diff: " << timestamp_diff << '\n';
-      //try_process_order(body);
     };
 
     std::visit(
