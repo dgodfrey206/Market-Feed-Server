@@ -34,7 +34,7 @@ int main(int argc, char* argv[]) {
     if (feed.ready()) {
         auto quote = feed.get_current_quote();
         manager.process_order(quote, feed.get_vwap());
-	feed.reset_window();
+        feed.reset_window();
     }
   }
 }
