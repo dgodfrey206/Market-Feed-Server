@@ -75,6 +75,8 @@ class Feed {
 
   void reset_window() {
 	pq_sum = q_sum = 0;
+	seen_trade = false;
+	timestamp_diff = -1;
         std::visit([&](auto const& body) { first_timestamp = body.timestamp; }, current_packet.body);
   }
 
