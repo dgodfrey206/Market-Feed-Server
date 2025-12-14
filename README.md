@@ -3,7 +3,7 @@
 Market Data Server receives serialized packets over a TCP connection. The packets represent quotes and trades for stocks. As the data is passed through a VWAP calculation is performed, and an order is sent to another socket connection when the order condition is ideal.
 
 ## Compiler requirements
-The program works for C++17 compilers or greater.
+The program works for compilers supporting C++14 or greater.
 
 ## Details
 Information about the name of the stock, the maximum order quantity, and the VWAP window are passed as command line arguments. The feed server recieves quotes and trades and keeps track of the timestamps, prices, and quantities, and uses this to determine when a order can be sent to the client. There must be at least one trade processed before an order can be made, because a trade has information that is incorporated into the VWAP calculation which determines when a new order can be made.
@@ -36,7 +36,7 @@ IBM B 100 30 127.0.0.1 5000 127.0.0.1 5001
 The program can be tested by running the following. Sample packets will be sent to main  from the server and orders will be sent to the client:
 ```bash
 make
-make run_server # run on seperate command line
-make run_client # run on seperate command line
-make run_main # run on seperate command line
+make run_server # run on seperate terminal
+make run_client # run on seperate terminal
+make run_main # run on seperate terminal
 ```
