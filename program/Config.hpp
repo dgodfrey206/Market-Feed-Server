@@ -1,8 +1,8 @@
-#include <cstdint>
-#include <string_view>
-
 #ifndef CONFIG_HPP
 #define CONFIG_HPP
+
+#include <cstdint>
+#include <string_view>
 
 struct Config {
   std::string_view symbol;

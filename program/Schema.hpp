@@ -1,9 +1,9 @@
+#ifndef SCHEMA_HPP
+#define SCHEMA_HPP
+
 #include <cstdint>
 #include <string_view>
 #include <variant>
-
-#ifndef SCHEMA_HPP
-#define SCHEMA_HPP
 
 namespace Schema {
 #pragma pack(push, 1)

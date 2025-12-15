@@ -1,3 +1,6 @@
+#ifndef FEED_HPP
+#define FEED_HPP
+
 #include "Config.hpp"
 #include "Schema.hpp"
 #include "Socket.hpp"
@@ -11,9 +14,6 @@
 #include <optional>
 #include <string_view>
 #include <variant>
-
-#ifndef FEED_HPP
-#define FEED_HPP
 
 namespace details {
 template <class... Ts> struct overloads : Ts... {
