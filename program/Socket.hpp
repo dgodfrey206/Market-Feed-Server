@@ -17,6 +17,12 @@ struct Socket {
     assert(success);
   }
 
+  template<class Data>
+  Socket& read(Data& data, std::size_t bytes) {
+    success = ::read(sock, &data, bytes) == bytes;
+    return *this;
+  }
+
   explicit operator bool() const { return success; }
 
   int handle() const { return sock; }

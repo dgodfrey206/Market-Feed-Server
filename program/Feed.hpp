@@ -30,17 +30,6 @@ template <class Packet> class Feed {
     std::string_view market_data_ip, market_data_port;
   };
 
-  struct packet_reader {
-    bool read_header(int sockfd, Packet &packet) {
-      return read(sockfd, &packet.header, sizeof packet.header) ==
-             sizeof packet.header;
-    }
-
-    template <class Body> bool read_body(int sockfd, Body &body) {
-      return read(sockfd, &body, sizeof(Body)) == sizeof(Body);
-    }
-  };
-
   using Header = typename Packet::Header;
   using Trade = Schema::Trade;
   using Quote = Schema::Quote;
@@ -48,12 +37,10 @@ template <class Packet> class Feed {
 private:
   Config &p_args;
   socket_addresses addr;
-  Socket market_connection;
+  Socket market_sock;
   std::optional<Quote> current_quote_;
   Packet current_packet;
   std::optional<std::uint64_t> first_timestamp;
-  packet_reader reader;
-  int market_sockfd;
   int pq_sum = 0;
   int q_sum = 0;
   bool seen_trade = false;
@@ -86,14 +73,13 @@ public:
 template <class Packet>
 Feed<Packet>::Feed(Config &config, socket_addresses addr)
     : p_args(config), addr(addr),
-      market_connection(addr.market_data_ip, addr.market_data_port),
-      market_sockfd(market_connection.handle()) {}
+      market_sock(addr.market_data_ip, addr.market_data_port) {}
 
 template <class Packet> void Feed<Packet>::forward() {
-  if (!market_connection)
+  if (!market_sock)
     return;
 
-  if (!reader.read_header(market_sockfd, current_packet))
+  if (!market_sock.read(current_packet, 2))
     return;
 
   std::cout << "Header length = " << (int)current_packet.header.length
@@ -108,7 +94,7 @@ template <class Packet> void Feed<Packet>::forward() {
   }
 
   auto process_packet_body = [this](auto &&body, auto &&callable) {
-    if (!reader.read_body(market_sockfd, body)) {
+    if (!market_sock.read(body, current_packet.header.length)) {
       perror("Failed to read packet body.");
       return;
     }
